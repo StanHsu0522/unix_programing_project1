@@ -1,5 +1,5 @@
 CC = g++
-CFLAGS = -g -Wall -O1 -std=c++11
+CFLAGS = -g -Wall -O2 -std=c++11
 
 all:
 	$(CC) $(CFLAGS) hw1_0866010.cpp -o hw1
