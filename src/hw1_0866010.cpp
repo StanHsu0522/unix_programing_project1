@@ -21,7 +21,7 @@ using namespace std;
 #define BUFFER_SIZE 500
 #define TMP_SIZE 160        // for buffering process args
 #define OUTPUT_IP_ADDR_WIDTH 25
-
+#define OUTPUT_PROTOCOL_WIDTH 6
 
 typedef struct Connection_entry
 {
@@ -43,7 +43,7 @@ bool is_number(char *cstr)
     return !s.empty() && it == s.end();
 }
 
-void parse_opt(int argc, char *argv[], map<string, bool> &show, vector<string> &filter_strs)
+void parse_opt(int argc, char *argv[], map<string, bool> &show, vector<string> &filter_strs, bool &flag)
 {
     const char *optstring = "tu";       // for short options
     int c ;
@@ -61,6 +61,8 @@ void parse_opt(int argc, char *argv[], map<string, bool> &show, vector<string> &
     while((c = getopt_long(argc, argv, optstring, opts, NULL)) != -1){
         // cout << optopt << endl;      // By default, getopt() prints an error message on standard error,
                                         // and places the erroneous option character in optopt, and returns '?'.
+
+        flag = true;
 
         switch (c)
         {
@@ -83,7 +85,8 @@ void parse_opt(int argc, char *argv[], map<string, bool> &show, vector<string> &
     }
 }
 
-string network_to_presentation(char *pch_bs, int ip_version){
+string network_to_presentation(char *pch_bs, int ip_version)
+{
 
     // Big-Endian puts highest bit in the lowwer memory adrress
     //
@@ -171,7 +174,8 @@ string network_to_presentation(char *pch_bs, int ip_version){
     return string(ip_addr_cstr) + ":" + to_string(stoul(string(pch_colo + 1), NULL, 16));
 }
 
-void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> > &ind_entry){
+void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> > &ind_entry)
+{
 
     FILE *fin;
     string path = "/proc/net/";
@@ -200,7 +204,7 @@ void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> 
         
 
         p_ce = new Con_entry();
-        p_ce->process = "";
+        p_ce->process = "-";
         p_ce->proto_version = ip_version;
 
         // Parse each row for ip_address and inodenumber with Token
@@ -238,7 +242,8 @@ void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> 
     fclose(fin);
 }
 
-void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tcp, vector<Con_entry> &udp){
+void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tcp, vector<Con_entry> &udp)
+{
     DIR *p_dir;
     FILE *fin;
 
@@ -278,10 +283,8 @@ void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tc
         subdir = dir + *it + "/fd/";        // (i.e. /proc/<PID>/fd/)
 
 
-        if((p_dir = opendir(subdir.c_str())) == NULL){       // On error, opendir() function returns NULL
-            cerr << "opendir: (/proc/<PID>/fd/)" << subdir << ": " << strerror(errno) << endl;
-            exit(EXIT_FAILURE);
-        }
+        // usually is permission denied, so skip
+        if((p_dir = opendir(subdir.c_str())) == NULL)   continue;
 
 
         // read one file info one iteration
@@ -316,6 +319,7 @@ void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tc
                         }
                         
                         // append PID
+                        (itvec + itind->second.second)->process.clear();
                         (itvec + itind->second.second)->process += *it;
                         (itvec + itind->second.second)->process += "/";
                         
@@ -349,8 +353,46 @@ void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tc
     }
 }
 
+void output(bool flag, map<string, bool> &show, vector<Con_entry> &tcp, vector<Con_entry> &udp)
+{
+    if(flag){
+        if(show["tcp"]){
+            cout << "List of TCP connections:\n";
+            cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << "Proto" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
+            for(auto it=tcp.begin() ; it!=tcp.end() ; ++it){
+                cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << string("tcp") + ((it->proto_version==4) ? "" : "6" ) << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
+            }
+            cout << endl;
+        }
+        if(show["udp"]){
+            cout << "List of UDP connections:\n";
+            cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
+            for(auto it=udp.begin() ; it!=udp.end() ; ++it){
+                cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << string("udp") + ((it->proto_version==4) ? "" : "6" ) << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
+            }
+            cout << endl;
+        }
+    }
+    else{
+        cout << "List of TCP connections:\n";
+        cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << "Proto" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
+        for(auto it=tcp.begin() ; it!=tcp.end() ; ++it){
+            cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << string("tcp") + ((it->proto_version==4) ? "" : "6" ) << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
+        }
+        cout << endl;
+
+        cout << "List of UDP connections:\n";
+        cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
+        for(auto it=udp.begin() ; it!=udp.end() ; ++it){
+            cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << string("udp") + ((it->proto_version==4) ? "" : "6" ) << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
+        }
+        cout << endl;
+    }
+}
+
 int main(int argc, char *argv[])
 {   
+    bool flag = false;
     map<string, bool> show;     // use to determine display either tcp or udp connections
     map<string, pair<char, int> > ind_entry;      //mapping between inode number and entry number of tcp or udp vector
     vector<string> filter_strs;     // store string for filter function
@@ -361,7 +403,7 @@ int main(int argc, char *argv[])
 
 
     // parse options passed by user
-    parse_opt(argc, &argv[0], show, filter_strs);
+    parse_opt(argc, &argv[0], show, filter_strs, flag);
 
     // read /proc/net/tcp & udp and store in data structure (i.e. vector tcp, udp)
     // concatenate the IPv6 info to the same vector (i.e. tcp or udp) below IPv4 info
@@ -374,32 +416,8 @@ int main(int argc, char *argv[])
     lookup_proc(ind_entry, tcp, udp);
 
 
-    if(show.size() > 0){        // only show tcp or udp or both
-        if(show["tcp"]){        // show tcp connections
-
-        }
-        else if(show["udp"]){       // show udp connections
-
-        }
-    }
-    else{       // default show all connections
-
-    }
-
-
-    cout << "List of TCP connections:\n";
-    cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
-    for(auto it=tcp.begin() ; it!=tcp.end() ; ++it){
-        cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
-    }
-    cout << endl;
-
-    cout << "List of UDP connections:\n";
-    cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
-    for(auto it=udp.begin() ; it!=udp.end() ; ++it){
-        cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
-    }
-    cout << endl;
+    // display results in std_out
+    output(flag, show, tcp, udp);
 
 
     exit(EXIT_SUCCESS);
