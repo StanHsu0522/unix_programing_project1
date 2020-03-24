@@ -7,6 +7,7 @@
 #include <cstring>      // for strtok(), strchr()
 #include <cstdio>       // for fopen(), fgets(), fclose()
 #include <arpa/inet.h>  // for inet_ntop()
+#include <iomanip>      // for setw()
 #include <utility>
 #include <cstdlib>
 #include <iostream>
@@ -18,6 +19,8 @@ using namespace std;
 
 
 #define BUFFER_SIZE 500
+#define TMP_SIZE 160        // for buffering process args
+#define OUTPUT_IP_ADDR_WIDTH 25
 
 
 typedef struct Connection_entry
@@ -168,10 +171,10 @@ string network_to_presentation(char *pch_bs, int ip_version){
     return string(ip_addr_cstr) + ":" + to_string(stoul(string(pch_colo + 1), NULL, 16));
 }
 
-void read_net(vector<Con_entry> &data, string file, map<string, pair<char, vector<Con_entry>::iterator> > &ind_entry){
+void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> > &ind_entry){
 
     FILE *fin;
-    string path = "/home/stan/nctu/unix_programing/src/project1/";
+    string path = "/proc/net/";
     char str[BUFFER_SIZE];
 
     Con_entry *p_ce;
@@ -227,82 +230,37 @@ void read_net(vector<Con_entry> &data, string file, map<string, pair<char, vecto
 
 
         data.push_back(*p_ce);      // copy the content of previous struct
-        ind_entry[data.back().inode_num] = make_pair((file.find("tcp")!=string::npos ? 't' : 'u'), data.end() - 1);     // maintain the mapping
+        ind_entry[data.back().inode_num] = make_pair((file.find("tcp")!=string::npos ? 't' : 'u'), data.size() - 1);     // maintain the mapping
 
         delete p_ce;        // free memory space for struct Con_entry
     }
 
     fclose(fin);
-
-    Con_entry *a = new Con_entry();
-    data.push_back(*a);
 }
 
-int main(int argc, char *argv[])
-{   
-    map<string, bool> show;     // use to determine display either tcp or udp connections
-    map<string, pair<char, vector<Con_entry>::iterator> > ind_entry;      //mapping between inode number and entry number of tcp or udp vector
-    vector<string> filter_strs;     // store string for filter function
-
-    vector<Con_entry> tcp;     // store tcp connection info from /proc/net/tcp
-    vector<Con_entry> udp;     // store udp connection info from /proc/net/udp
-
-
-
-    // // read /proc/net/tcp & udp and store in data structure (i.e. vector tcp, udp)
-    // // concatenate the IPv6 info to the same vector (i.e. tcp or udp) below IPv4 info
-    // read_net(tcp, "tcp", ind_entry);
-    // read_net(udp, "udp", ind_entry);
-    // read_net(tcp, "tcp6", ind_entry);
-    // read_net(udp, "udp6", ind_entry);
-
-    // cout << "[TCP Links]\nlocal_addr\t\tremote_addr\t\t#inode\t\tpid\n";
-    // for(auto it=tcp.begin() ; it!=tcp.end() ; ++it){
-    //     cout << it->local_addr << ((it->local_addr.length() >15) ? "\t" : "\t\t") << it->foreign_addr << ((it->foreign_addr.length() >15) ? "\t" : "\t\t") << it->inode_num << "\t" << it->process << "\n";
-    // }
-    // cout << endl;
-
-    // cout << "[UDP Links]\nlocal_addr\t\tremote_addr\t\t#inode\t\tpid\n";
-    // for(auto it=udp.begin() ; it!=udp.end() ; ++it){
-    //     cout << it->local_addr << ((it->local_addr.length() >15) ? "\t" : "\t\t") << it->foreign_addr << ((it->foreign_addr.length() >15) ? "\t" : "\t\t") << it->inode_num << "\t" << it->process << "\n";
-    // }
-    // cout << endl;
-
-
-
-
-
-
-    // // readlink
-    // char link_path[50] = "/proc/20284/fd/96";
-    // char target_path[256];
-
-    // memset(target_path, 0, sizeof(target_path));
-    // if(readlink(link_path, target_path, sizeof(target_path)) == -1)      // On error, readlink returns -1 
-    // {
-    //     cerr << "readlink: " << link_path << ": " << strerror(errno) << endl;
-    //     exit(EXIT_FAILURE);
-    // }
-    // else
-    // {
-    //     cout << "link path: " << target_path;
-    // }
-
-
-
-
-    // opendir & readdir & closedir
+void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tcp, vector<Con_entry> &udp){
     DIR *p_dir;
-    string dir, subdir;
+    FILE *fin;
+
+    const string dir = "/proc/";
+    string subdir;
+
+    char *r_branket, *l_branket;
+    char target_path[256];
+    char tmp[TMP_SIZE];
+    char *pch_hyphen;
     struct dirent *p_dirent;
+
+    map<string, pair<char, int> >::iterator itind;
+    vector<Con_entry>::iterator itvec;
     vector<string> proc_list;
 
-    dir = "/proc/";
 
 
 
-    if((p_dir = opendir(dir.c_str())) == NULL){       // On error, opendir() function returns NULL 
-        cerr << "opendir: " << dir << ": " << strerror(errno) << endl;
+    // first build up a list storing running process's PID
+    if((p_dir = opendir(dir.c_str())) == NULL){       // On error, opendir() function returns NULL
+        cerr << "opendir: (/proc/)" << dir << ": " << strerror(errno) << endl;
         exit(EXIT_FAILURE);
     }
 
@@ -312,88 +270,137 @@ int main(int argc, char *argv[])
     }        
     closedir(p_dir);
 
-    // for(auto it = proc_list.begin() ; it!=proc_list.end() ;++it) cout << *it << "\t";
-    // cout << endl;
 
 
+
+    // use previous-created proc_list to traverse all the process's fd dir
     for(auto it=proc_list.begin() ; it!=proc_list.end() ; it++){
-        subdir = dir + *it + "/fd/";
-        cout << "dir: " << subdir << endl;
+        subdir = dir + *it + "/fd/";        // (i.e. /proc/<PID>/fd/)
 
 
-        if((p_dir = opendir(subdir.c_str())) == NULL){       // On error, opendir() function returns NULL 
-            cerr << "opendir: " << subdir << ": " << strerror(errno) << endl;
+        if((p_dir = opendir(subdir.c_str())) == NULL){       // On error, opendir() function returns NULL
+            cerr << "opendir: (/proc/<PID>/fd/)" << subdir << ": " << strerror(errno) << endl;
             exit(EXIT_FAILURE);
         }
 
+
+        // read one file info one iteration
         while((p_dirent = readdir(p_dir)) != NULL){
 
-            switch (p_dirent->d_type)
-            {
-            case DT_CHR:
-                cout << "C ";
-                break;
-            case DT_DIR:
-                cout << "D ";
-                break;
-            case DT_LNK:
-                cout << "L ";
-                break;
-            case DT_REG:
-                cout << "- ";
-                break;
-            default:
-                cout << "? ";
-                break;
+            // check if the file is symbolic link
+            if(p_dirent->d_type == DT_LNK){
+
+                // readlink
+                if(readlink((subdir + p_dirent->d_name).c_str(), target_path, sizeof(target_path)) == -1){      // On error, readlink returns -1 
+                    cerr << "readlink: " << strerror(errno) << endl;
+                    exit(EXIT_FAILURE);
+                }
+                
+                if(strstr(target_path, "socket:")){
+                    // cout << target_path << "\n";
+
+                    // locate '[' & ']' for extacting PID (e.g. socket:[546215])
+                    l_branket = strchr(target_path, '[');
+                    r_branket = strchr(target_path, ']');
+
+
+                    // check if the entry for this PID exists
+                    if((itind = ind_entry.find(string(l_branket + 1, r_branket - l_branket - 1))) != ind_entry.end()){
+
+                        // switch to tcp vector or udp for filling up the process infomations
+                        if(itind->second.first == 't'){
+                            itvec = tcp.begin();
+                        }
+                        else{
+                            itvec = udp.begin();
+                        }
+                        
+                        // append PID
+                        (itvec + itind->second.second)->process += *it;
+                        (itvec + itind->second.second)->process += "/";
+                        
+
+                        // get command (i.e. process name)
+                        fin = fopen((dir + *it + "/comm").c_str(), "r");
+                        if(fin == NULL){
+                            cerr << "fopen: (process file)" << strerror(errno) << endl;
+                            exit(EXIT_FAILURE);
+                        }
+                        fgets(tmp, TMP_SIZE, fin);
+                        if(*(tmp + strlen(tmp) - 1) == '\n')   *(tmp + strlen(tmp) - 1) = '\0';
+                        (itvec + itind->second.second)->process += tmp;
+                        (itvec + itind->second.second)->process += " ";
+                        fclose(fin);
+                
+
+                        // get cmdline arguments
+                        fin = fopen((dir + *it + "/cmdline").c_str(), "r");
+                        if(fin == NULL){
+                            cerr << "fopen: (process file)" << strerror(errno) << endl;
+                            exit(EXIT_FAILURE);
+                        }
+                        (itvec + itind->second.second)->process += ((pch_hyphen = strchr(fgets(tmp, TMP_SIZE, fin), '-')) == NULL ? "" : pch_hyphen);
+                        fclose(fin);
+                    }
+                }
             }
-            cout << p_dirent->d_name << " ";
-            
         }
-        cout << "\n" << endl;
-
         closedir(p_dir);
-        
     }
+}
 
+int main(int argc, char *argv[])
+{   
+    map<string, bool> show;     // use to determine display either tcp or udp connections
+    map<string, pair<char, int> > ind_entry;      //mapping between inode number and entry number of tcp or udp vector
+    vector<string> filter_strs;     // store string for filter function
 
+    vector<Con_entry> tcp;     // store tcp connection info from /proc/net/tcp
+    vector<Con_entry> udp;     // store udp connection info from /proc/net/udp
 
 
 
     // parse options passed by user
-    // parse_opt(argc, &argv[0], show, filter_strs);
+    parse_opt(argc, &argv[0], show, filter_strs);
+
+    // read /proc/net/tcp & udp and store in data structure (i.e. vector tcp, udp)
+    // concatenate the IPv6 info to the same vector (i.e. tcp or udp) below IPv4 info
+    read_net(tcp, "tcp", ind_entry);
+    read_net(udp, "udp", ind_entry);
+    read_net(tcp, "tcp6", ind_entry);
+    read_net(udp, "udp6", ind_entry);
 
 
-    // if(show.size() > 0){        // only show tcp or udp or both
-    //     if(show["tcp"]){        // show tcp connections
+    lookup_proc(ind_entry, tcp, udp);
 
-    //     }
-    //     else if(show["udp"]){       // show udp connections
 
-    //     }
-    // }
-    // else{       // default show all connections
+    if(show.size() > 0){        // only show tcp or udp or both
+        if(show["tcp"]){        // show tcp connections
 
-    // }
+        }
+        else if(show["udp"]){       // show udp connections
+
+        }
+    }
+    else{       // default show all connections
+
+    }
+
+
+    cout << "List of TCP connections:\n";
+    cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
+    for(auto it=tcp.begin() ; it!=tcp.end() ; ++it){
+        cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
+    }
+    cout << endl;
+
+    cout << "List of UDP connections:\n";
+    cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
+    for(auto it=udp.begin() ; it!=udp.end() ; ++it){
+        cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
+    }
+    cout << endl;
+
 
     exit(EXIT_SUCCESS);
-
-    // // map show traverse
-    // for(auto it = show.begin() ; it!=show.end() ; ++it){
-    //     if(it->second){
-    //         cout << "show " << it->first << endl;
-    //     }
-    //     else
-    //     {
-    //         cout << "don't show " << it->first << endl;
-    //     }
-    // }
-
-    // // vector filter_strs traverse
-    // if(filter_strs.size() > 0){
-    //     cout << "filter_str: ";
-    //     for(auto it=filter_strs.begin() ; it!=filter_strs.end() ; ++it){
-    //         cout << *it << " ";
-    //     }
-    //     cout << endl;
-    // }
 }
