@@ -1,39 +1,4 @@
-#include <getopt.h>     // for getopt_long()
-#include <sys/types.h>  // for opendir(), stat()
-#include <sys/stat.h>   // for stat()
-#include <dirent.h>     // for opendir(), readdir()
-#include <unistd.h>     // for stat(), readlink()
-#include <string.h>     // for strerror()
-#include <cstring>      // for strtok(), strchr()
-#include <cstdio>       // for fopen(), fgets(), fclose()
-#include <arpa/inet.h>  // for inet_ntop()
-#include <iomanip>      // for setw()
-#include <utility>
-#include <cstdlib>
-#include <iostream>
-#include <map>
-#include <string>
-#include <vector>
-
-using namespace std;
-
-
-#define BUFFER_SIZE 500
-#define TMP_SIZE 160        // for buffering process args
-#define OUTPUT_IP_ADDR_WIDTH 25
-#define OUTPUT_PROTOCOL_WIDTH 6
-
-typedef struct Connection_entry
-{
-    string local_addr;
-    string foreign_addr;
-    string process;
-    string inode_num;
-    int proto_version;
-} Con_entry;
-
-
-
+#include "hw1_0866010.h"
 
 bool is_number(char *cstr)
 {
@@ -85,7 +50,7 @@ void parse_opt(int argc, char *argv[], map<string, bool> &show, vector<string> &
     }
 }
 
-string network_to_presentation(char *pch_bs, int ip_version)
+string network_to_presentation(char *pch_bs, string proto)
 {
 
     // Big-Endian puts highest bit in the lowwer memory adrress
@@ -123,8 +88,11 @@ string network_to_presentation(char *pch_bs, int ip_version)
     char *pch_colo;
     const char *ntop_result;
     char ip_addr_cstr[INET6_ADDRSTRLEN];
+    string port;
+    int ip_version;
 
 
+    ip_version = (strchr(proto.c_str(), '6')==NULL) ? 4 : 6;
 
     pch_colo = strchr(pch_bs, ':');         // search the position of colon for seperating the address and port
 
@@ -171,22 +139,22 @@ string network_to_presentation(char *pch_bs, int ip_version)
         exit(EXIT_FAILURE);
     }
 
-    return string(ip_addr_cstr) + ":" + to_string(stoul(string(pch_colo + 1), NULL, 16));
+    port = to_string(stoul(string(pch_colo + 1), NULL, 16));
+
+    return string(ip_addr_cstr) + ":" + ((port == "0") ? "*" : port);
 }
 
-void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> > &ind_entry)
+void read_net(vector<pair<bool, Con_entry> > &data, string file, map<string, pair<char, int> > &ind_entry)
 {
+    Con_entry *p_ce;
 
     FILE *fin;
     string path = "/proc/net/";
     char str[BUFFER_SIZE];
 
-    Con_entry *p_ce;
-
     const char *Token = " ";
     char *pch_bs;
 
-    int ip_version = strchr(file.c_str(), '6') ? 6 : 4;
 
 
     fin = fopen((path + file).c_str(), "r");
@@ -205,7 +173,7 @@ void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> 
 
         p_ce = new Con_entry();
         p_ce->process = "-";
-        p_ce->proto_version = ip_version;
+        p_ce->protocol = file;
 
         // Parse each row for ip_address and inodenumber with Token
         pch_bs = strtok(str, Token);
@@ -216,11 +184,11 @@ void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> 
             {
             case 1:     // local_address
                 // cout << "col1: " << pch_bs << " ";
-                p_ce->local_addr = network_to_presentation(pch_bs, ip_version);
+                p_ce->local_addr = network_to_presentation(pch_bs, file);
                 break;
             case 2:     // rem_address
                 // cout << "col2:" << pch_bs << " ";
-                p_ce->foreign_addr = network_to_presentation(pch_bs, ip_version);
+                p_ce->foreign_addr = network_to_presentation(pch_bs, file);
                 break;
             case 9:     // inode number
                 // cout << "col9: " << pch_bs << " ";
@@ -233,8 +201,8 @@ void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> 
         }
 
 
-        data.push_back(*p_ce);      // copy the content of previous struct
-        ind_entry[data.back().inode_num] = make_pair((file.find("tcp")!=string::npos ? 't' : 'u'), data.size() - 1);     // maintain the mapping
+        data.push_back(make_pair(true, *p_ce));      // copy the content of previous struct
+        ind_entry[data.back().second.inode_num] = make_pair((file.find("tcp")!=string::npos ? 't' : 'u'), data.size() - 1);     // maintain the mapping
 
         delete p_ce;        // free memory space for struct Con_entry
     }
@@ -242,7 +210,7 @@ void read_net(vector<Con_entry> &data, string file, map<string, pair<char, int> 
     fclose(fin);
 }
 
-void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tcp, vector<Con_entry> &udp)
+void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<pair<bool, Con_entry> > &tcp, vector<pair<bool, Con_entry> > &udp)
 {
     DIR *p_dir;
     FILE *fin;
@@ -257,7 +225,7 @@ void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tc
     struct dirent *p_dirent;
 
     map<string, pair<char, int> >::iterator itind;
-    vector<Con_entry>::iterator itvec;
+    vector<pair<bool, Con_entry> >::iterator itvec;
     vector<string> proc_list;
 
 
@@ -282,9 +250,18 @@ void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tc
     for(auto it=proc_list.begin() ; it!=proc_list.end() ; it++){
         subdir = dir + *it + "/fd/";        // (i.e. /proc/<PID>/fd/)
 
-
-        // usually is permission denied, so skip
-        if((p_dir = opendir(subdir.c_str())) == NULL)   continue;
+        // opendir error
+        if((p_dir = opendir(subdir.c_str())) == NULL){
+            
+            // usually is permission denied, so skip
+            if(errno == EACCES){
+                continue;
+            }
+            else{
+                cerr << "opendir: " << subdir << ": " << strerror(errno) << endl;
+                exit(EXIT_FAILURE);
+            }
+        }
 
 
         // read one file info one iteration
@@ -319,9 +296,9 @@ void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tc
                         }
                         
                         // append PID
-                        (itvec + itind->second.second)->process.clear();
-                        (itvec + itind->second.second)->process += *it;
-                        (itvec + itind->second.second)->process += "/";
+                        (itvec + itind->second.second)->second.process.clear();
+                        (itvec + itind->second.second)->second.process += *it;
+                        (itvec + itind->second.second)->second.process += "/";
                         
 
                         // get command (i.e. process name)
@@ -332,8 +309,7 @@ void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tc
                         }
                         fgets(tmp, TMP_SIZE, fin);
                         if(*(tmp + strlen(tmp) - 1) == '\n')   *(tmp + strlen(tmp) - 1) = '\0';
-                        (itvec + itind->second.second)->process += tmp;
-                        (itvec + itind->second.second)->process += " ";
+                        (itvec + itind->second.second)->second.process += tmp;
                         fclose(fin);
                 
 
@@ -343,7 +319,7 @@ void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tc
                             cerr << "fopen: (process file)" << strerror(errno) << endl;
                             exit(EXIT_FAILURE);
                         }
-                        (itvec + itind->second.second)->process += ((pch_hyphen = strchr(fgets(tmp, TMP_SIZE, fin), '-')) == NULL ? "" : pch_hyphen);
+                        (itvec + itind->second.second)->second.process += ((pch_hyphen = strchr(fgets(tmp, TMP_SIZE, fin), ' ')) == NULL ? "" : pch_hyphen);
                         fclose(fin);
                     }
                 }
@@ -353,52 +329,88 @@ void lookup_proc(map<string, pair<char, int> > &ind_entry, vector<Con_entry> &tc
     }
 }
 
-void output(bool flag, map<string, bool> &show, vector<Con_entry> &tcp, vector<Con_entry> &udp)
+void output(bool flag, map<string, bool> &show, const vector<pair<bool, Con_entry> > &tcp, const vector<pair<bool, Con_entry> > &udp)
 {
     if(flag){
         if(show["tcp"]){
             cout << "List of TCP connections:\n";
             cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << "Proto" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
             for(auto it=tcp.begin() ; it!=tcp.end() ; ++it){
-                cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << string("tcp") + ((it->proto_version==4) ? "" : "6" ) << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
+                if(it->first)
+                    cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << it->second.protocol << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->second.local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->second.foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->second.process << "\n";
             }
             cout << endl;
         }
         if(show["udp"]){
             cout << "List of UDP connections:\n";
-            cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
+            cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << "Proto" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
             for(auto it=udp.begin() ; it!=udp.end() ; ++it){
-                cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << string("udp") + ((it->proto_version==4) ? "" : "6" ) << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
+                if(it->first)
+                    cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << it->second.protocol << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->second.local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->second.foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->second.process << "\n";
             }
             cout << endl;
         }
     }
-    else{
-        cout << "List of TCP connections:\n";
-        cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << "Proto" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
-        for(auto it=tcp.begin() ; it!=tcp.end() ; ++it){
-            cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << string("tcp") + ((it->proto_version==4) ? "" : "6" ) << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
-        }
-        cout << endl;
 
-        cout << "List of UDP connections:\n";
-        cout << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
-        for(auto it=udp.begin() ; it!=udp.end() ; ++it){
-            cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << string("udp") + ((it->proto_version==4) ? "" : "6" ) << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->process << "\n";
+    // default display (show both tcp & udp)
+    else{
+        for(int i=0 ; i<2 ;++i){
+            cout << "List of "<< (i==0 ? "TCP" : "UDP") << " connections:\n";
+            cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << "Proto" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Local Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "Forign Address" << setw(OUTPUT_IP_ADDR_WIDTH) << left << "PID/Program name and arguments" << endl;
+            for(auto it=(i==0 ? tcp.begin() : udp.begin()); it!=(i==0 ? tcp.end() : udp.end()) ; ++it){
+                if(it->first)
+                    cout << setw(OUTPUT_PROTOCOL_WIDTH) << left << it->second.protocol << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->second.local_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->second.foreign_addr << setw(OUTPUT_IP_ADDR_WIDTH) << left << it->second.process << "\n";
+            }
+            cout << endl;
         }
-        cout << endl;
+    }
+}
+
+void filter(const vector<string> &filter_strs, vector<pair<bool, Con_entry> > &tcp, vector<pair<bool, Con_entry> > &udp){
+    if(filter_strs.size() > 0){
+        for(auto i=0 ; i<2 ; ++i){
+
+            // traverse both tcp and udp vector to match filter
+            for(auto it_entry=(i==0 ? tcp.begin() : udp.begin()); it_entry!=(i==0 ? tcp.end() : udp.end()) ; ++it_entry){
+                
+                // In default, turn off visability of each entry
+                it_entry->first = false;
+
+                for(auto it_filter_str=filter_strs.begin() ; it_filter_str!=filter_strs.end() ; ++it_filter_str){
+                    if(it_entry->second.protocol.find(*it_filter_str) != string::npos){
+                        it_entry->first = true;
+                        goto MATCH;
+                    }
+                    if(it_entry->second.local_addr.find(*it_filter_str) != string::npos){
+                        it_entry->first = true;
+                        goto MATCH;
+                    }
+                    if(it_entry->second.foreign_addr.find(*it_filter_str) != string::npos){
+                        it_entry->first = true;
+                        goto MATCH;
+                    }
+                    if(it_entry->second.process.find(*it_filter_str) != string::npos){
+                        it_entry->first = true;
+                        goto MATCH;
+                    }
+
+                    MATCH:
+                        break;
+                }
+            }
+        }
     }
 }
 
 int main(int argc, char *argv[])
 {   
     bool flag = false;
-    map<string, bool> show;     // use to determine display either tcp or udp connections
-    map<string, pair<char, int> > ind_entry;      //mapping between inode number and entry number of tcp or udp vector
-    vector<string> filter_strs;     // store string for filter function
+    map<string, bool> show;                         // use to determine display either tcp or udp connections
+    map<string, pair<char, int> > ind_entry;        //mapping between inode number and entry number of tcp or udp vector
+    vector<string> filter_strs;                     // store string for filter function
 
-    vector<Con_entry> tcp;     // store tcp connection info from /proc/net/tcp
-    vector<Con_entry> udp;     // store udp connection info from /proc/net/udp
+    vector<pair<bool, Con_entry> > tcp;     // store tcp connection info from /proc/net/tcp
+    vector<pair<bool, Con_entry> > udp;     // store udp connection info from /proc/net/udp
 
 
 
@@ -412,13 +424,14 @@ int main(int argc, char *argv[])
     read_net(tcp, "tcp6", ind_entry);
     read_net(udp, "udp6", ind_entry);
 
-
+    // use inode unmber to map process
     lookup_proc(ind_entry, tcp, udp);
 
+    // filter out result
+    filter(filter_strs, tcp, udp);
 
     // display results in std_out
     output(flag, show, tcp, udp);
-
 
     exit(EXIT_SUCCESS);
 }
