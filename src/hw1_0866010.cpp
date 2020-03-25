@@ -366,7 +366,8 @@ void output(bool flag, map<string, bool> &show, const vector<pair<bool, Con_entr
     }
 }
 
-void filter(const vector<string> &filter_strs, vector<pair<bool, Con_entry> > &tcp, vector<pair<bool, Con_entry> > &udp){
+void filter(const vector<string> &filter_strs, vector<pair<bool, Con_entry> > &tcp, vector<pair<bool, Con_entry> > &udp)
+{
     if(filter_strs.size() > 0){
         for(auto i=0 ; i<2 ; ++i){
 
